@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>192.168.1.1 — Gateway Conntrack &amp; NAT Logs</title>
+  <style>
+    :root {
+      --bg-root: #0d1015;
+      --bg-sidebar: #11151c;
+      --bg-panel: #151922;
+      --bg-header: #181d27;
+      --bg-input: #0c0f14;
+      --bg-hover: #1d2330;
+      --bg-selected: #1e293b;
+      --border: #252c3a;
+      --border-subtle: #1c222d;
+      --text-main: #d1d5db;
+      --text-bright: #f3f4f6;
+      --text-sub: #8b94a5;
+      --text-muted: #5c6577;
+      --accent: #3b82f6;
+      --accent-dim: #2563eb;
+      --proto-tcp: #93c5fd;
+      --proto-udp: #a7f3d0;
+      --state-ok: #6ee7b7;
+      --state-closed: #9ca3af;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: var(--bg-root);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .app-layout {
+      display: flex;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ================= 左侧精简导航栏（RouterOS / OPNsense 深色风格） ================= */
+    .sidebar {
+      width: 196px;
+      background-color: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .sys-header {
+      height: 42px;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      background-color: #0e1218;
+    }
+
+    .sys-title {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-bright);
+      letter-spacing: 0.4px;
+    }
+
+    .sys-ver {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .nav-group-title {
+      padding: 14px 14px 5px 14px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--text-muted);
+    }
+
+    .nav-item {
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--text-sub);
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      font-size: 12px;
+    }
+
+    .nav-item:hover {
+      background-color: var(--bg-hover);
+      color: var(--text-bright);
+    }
+
+    .nav-item.active {
+      background-color: #192130;
+      color: var(--text-bright);
+      border-left-color: var(--accent);
+      font-weight: 500;
+    }
+
+    .nav-item svg {
+      width: 13px;
+      height: 13px;
+      fill: currentColor;
+      opacity: 0.8;
+      flex-shrink: 0;
+    }
+
+    .sidebar-meta {
+      margin-top: auto;
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .sidebar-meta span {
+      color: var(--text-sub);
+    }
+
+    /* ================= 右侧工作区 ================= */
+    .main-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      height: 100%;
+    }
+
+    /* 顶部状态条 */
+    .topbar {
+      height: 42px;
+      background-color: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .path-crumbs {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-sub);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .path-crumbs strong {
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+
+    .sys-stats {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-sub);
+    }
+
+    .live-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-sub);
+    }
+
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: #22c55e;
+    }
+
+    .live-dot.paused {
+      background-color: #6b7280;
+    }
+
+    /* 页面视图切换 */
+    .view-pane {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .view-pane.active {
+      display: flex;
+    }
+
+    /* ================= 紧凑型过滤查询栏 ================= */
+    .toolbar-bar {
+      background-color: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    .tb-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tb-label {
+      font-size: 11px;
+      color: var(--text-sub);
+      font-family: var(--font-mono);
+    }
+
+    .tb-input, .tb-select {
+      height: 28px;
+      background-color: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text-bright);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 0 9px;
+      outline: none;
+    }
+
+    .tb-input {
+      width: 270px;
+    }
+
+    .tb-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .tb-input:focus, .tb-select:focus {
+      border-color: var(--accent);
+    }
+
+    .tb-btn {
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 3px;
+      font-size: 11.5px;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background-color: #1f2633;
+      color: var(--text-bright);
+    }
+
+    .tb-btn:hover {
+      background-color: #283142;
+    }
+
+    .tb-btn.primary {
+      background-color: var(--accent-dim);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    .tb-btn.primary:hover {
+      background-color: var(--accent);
+    }
+
+    .tb-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* ================= 主体日志表 ================= */
+    .table-region {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      background-color: var(--bg-root);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .table-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .table-scroll::-webkit-scrollbar,
+    .syslog-pre::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+
+    .table-scroll::-webkit-scrollbar-track,
+    .syslog-pre::-webkit-scrollbar-track {
+      background: #0d1015;
+    }
+
+    .table-scroll::-webkit-scrollbar-thumb,
+    .syslog-pre::-webkit-scrollbar-thumb {
+      background: #272f3d;
+      border-radius: 2px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background-color: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      color: var(--text-sub);
+      font-weight: 600;
+      text-align: left;
+      padding: 7px 10px;
+      font-size: 10.5px;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      z-index: 3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    tbody td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    tbody tr {
+      cursor: pointer;
+    }
+
+    tbody tr:nth-child(even) {
+      background-color: rgba(255, 255, 255, 0.012);
+    }
+
+    tbody tr:hover {
+      background-color: var(--bg-hover);
+    }
+
+    tbody tr.selected {
+      background-color: var(--bg-selected);
+    }
+
+    tbody tr.selected td {
+      color: var(--text-bright);
+    }
+
+    tbody tr.selected td:first-child {
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+
+    .c-muted { color: var(--text-sub); }
+    .c-tcp { color: var(--proto-tcp); }
+    .c-udp { color: var(--proto-udp); }
+    .c-state-est { color: var(--state-ok); }
+    .c-state-cls { color: var(--state-closed); }
+
+    /* 归档检索遮罩 */
+    .archive-overlay {
+      position: absolute;
+      inset: 28px 0 0 0;
+      background: rgba(13, 16, 21, 0.84);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      z-index: 10;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-sub);
+    }
+
+    .archive-overlay.active {
+      display: flex;
+    }
+
+    .spin-ring {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #2b3445;
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* ================= 底部技术详查抽屉 ================= */
+    .detail-drawer {
+      height: 196px;
+      background-color: var(--bg-panel);
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .drawer-header {
+      height: 28px;
+      background-color: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-sub);
+      flex-shrink: 0;
+    }
+
+    .drawer-content {
+      flex: 1;
+      padding: 10px 14px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 18px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+    }
+
+    .drawer-empty {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 11.5px;
+    }
+
+    .detail-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      border-right: 1px solid var(--border-subtle);
+      padding-right: 14px;
+    }
+
+    .detail-col:last-child {
+      border-right: none;
+      padding-right: 0;
+    }
+
+    .col-heading {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 3px;
+    }
+
+    .kv-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      line-height: 1.5;
+    }
+
+    .kv-k {
+      color: var(--text-sub);
+      flex-shrink: 0;
+    }
+
+    .kv-v {
+      color: var(--text-bright);
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .raw-footer {
+      background-color: #0b0e13;
+      border-top: 1px solid var(--border-subtle);
+      padding: 6px 14px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: #7c889b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 0;
+    }
+
+    /* ================= 底部状态栏 ================= */
+    .statusbar {
+      height: 24px;
+      background-color: #0b0e13;
+      border-top: 1px solid var(--border);
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    /* ================= 其他视图（DHCP / AP / Syslog） ================= */
+    .syslog-pre {
+      flex: 1;
+      background-color: #0a0d12;
+      color: #9ca3af;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.6;
+      padding: 12px 16px;
+      overflow-y: auto;
+      white-space: pre;
+    }
+
+    .status-grid {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .stat-box {
+      background-color: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 12px 14px;
+      font-family: var(--font-mono);
+    }
+
+    .stat-k {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .stat-v {
+      font-size: 16px;
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+
+    .stat-s {
+      font-size: 10.5px;
+      color: var(--text-sub);
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app-layout">
+
+    <!-- 左侧路由器系统导航 -->
+    <aside class="sidebar">
+      <div class="sys-header">
+        <span class="sys-title">RouterOS / GW</span>
+        <span class="sys-ver">v7.14</span>
+      </div>
+
+      <div class="nav-group-title">Firewall &amp; Routing</div>
+      <div class="nav-item active" id="nav-nat" onclick="switchView('nat', this)">
+        <svg viewBox="0 0 24 24"><path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h18v2H3z"/></svg>
+        NAT / Conntrack
+      </div>
+      <div class="nav-item" id="nav-dhcp" onclick="switchView('dhcp', this)">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16v4H4zm0 8h16v4H4z"/></svg>
+        DHCP Leases
+      </div>
+      <div class="nav-item" id="nav-ap" onclick="switchView('ap', this)">
+        <svg viewBox="0 0 24 24"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>
+        Wireless APs
+      </div>
+
+      <div class="nav-group-title">System</div>
+      <div class="nav-item" id="nav-syslog" onclick="switchView('syslog', this)">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4V4zm2 4v2h12V8H6zm0 4v2h12v-2H6zm0 4v2h8v-2H6z"/></svg>
+        Syslog Raw
+      </div>
+
+      <div class="sidebar-meta">
+        <div>HOST: <span>gw-netcafe-01</span></div>
+        <div>WAN0: <span>203.145.72.18</span></div>
+        <div>LAN: <span>192.168.1.1/24</span></div>
+        <div>WLAN: <span>192.168.10.1/24</span></div>
+        <div>UPTIME: <span>34d 09:18:42</span></div>
+      </div>
+    </aside>
+
+    <!-- 右侧主工作区 -->
+    <div class="main-col">
+
+      <!-- 顶部条 -->
+      <header class="topbar">
+        <div class="path-crumbs">
+          <span>192.168.1.1</span>
+          <span>/</span>
+          <span>firewall</span>
+          <span>/</span>
+          <strong id="topbarPath">conntrack-logs</strong>
+        </div>
+        <div class="sys-stats">
+          <span class="live-indicator">
+            <span class="live-dot" id="liveDot"></span>
+            <span id="liveLabel">LIVE TAIL</span>
+          </span>
+          <span>CONNTRACK: <strong id="connCount" style="color:var(--text-bright);">1,648</strong></span>
+          <span>CPU: 14%</span>
+          <span>root@gw-netcafe-01</span>
+        </div>
+      </header>
+
+      <!-- ================= 视图 1：NAT / Conntrack 日志（主实拍页） ================= -->
+      <section class="view-pane active" id="view-nat">
+
+        <!-- 过滤与归档检索栏 -->
+        <div class="toolbar-bar">
+          <div class="tb-group">
+            <span class="tb-label">SOURCE:</span>
+            <select id="logSource" class="tb-select" onchange="handleSourceChange()">
+              <option value="live">Live Buffer (Today)</option>
+              <option value="archive48">Archive (Last 48h — conntrack.log.1.gz)</option>
+              <option value="archive7d">Archive (Last 7d — rotated)</option>
+            </select>
+          </div>
+
+          <div class="tb-group">
+            <span class="tb-label">FILTER:</span>
+            <input type="text" id="filterInput" class="tb-input" placeholder="dst_ip, src_ip, mac, or port..." autocomplete="off" spellcheck="false">
+          </div>
+
+          <div class="tb-group">
+            <select id="ifaceSelect" class="tb-select" onchange="runQuery()">
+              <option value="ALL">IFACE: ALL</option>
+              <option value="vlan10-wlan">vlan10-wlan</option>
+              <option value="br-lan">br-lan</option>
+            </select>
+          </div>
+
+          <button class="tb-btn primary" onclick="triggerQueryBtn()">Query</button>
+          <button class="tb-btn" onclick="resetAll()">Clear</button>
+          <button class="tb-btn" id="pauseBtn" onclick="toggleLivePause()">Pause</button>
+
+          <div class="tb-right">
+            <span id="rowCountMeta">0 rows</span>
+          </div>
+        </div>
+
+        <!-- 日志表格主体 -->
+        <div class="table-region">
+          <div class="archive-overlay" id="archiveOverlay">
+            <div class="spin-ring"></div>
+            <span id="archiveOverlayMsg">zgrep /var/log/nat/conntrack.log.1.gz ...</span>
+          </div>
+
+          <div class="table-scroll" id="natTableScroll">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:16%;">Timestamp / Age</th>
+                  <th style="width:10%;">Interface</th>
+                  <th style="width:16%;">Src IP : Port</th>
+                  <th style="width:15%;">Src MAC</th>
+                  <th style="width:16%;">Dst IP : Port</th>
+                  <th style="width:7%;">Proto</th>
+                  <th style="width:11%;">TX / RX</th>
+                  <th style="width:9%;">State</th>
+                </tr>
+              </thead>
+              <tbody id="natTbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 底部技术详查抽屉（点击上方某一行才会显示内容） -->
+        <div class="detail-drawer">
+          <div class="drawer-header">
+            <span id="drawerTitle">SESSION ACCOUNTING &amp; DHCP/802.11 CORRELATION</span>
+            <span id="drawerStatus">No row selected</span>
+          </div>
+
+          <div class="drawer-content" id="drawerContent">
+            <div class="drawer-empty">Click any NAT flow record above to inspect full session window, DHCP lease binding, and associated AP radio node.</div>
+          </div>
+
+          <div class="raw-footer" id="drawerRaw">
+            syslog: —
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================= 视图 2：DHCP Leases ================= -->
+      <section class="view-pane" id="view-dhcp">
+        <div class="toolbar-bar">
+          <div class="tb-group">
+            <span class="tb-label">LEASE TABLE:</span>
+            <select id="dhcpScope" class="tb-select" onchange="renderDhcpTable()">
+              <option value="active">Active Leases (Today)</option>
+              <option value="history">All Leases (Including Expired — Last 48h)</option>
+            </select>
+          </div>
+          <div class="tb-group">
+            <span class="tb-label">SEARCH:</span>
+            <input type="text" id="dhcpFilter" class="tb-input" style="width:220px;" placeholder="IP or MAC..." oninput="renderDhcpTable()">
+          </div>
+        </div>
+        <div class="table-region">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:13%;">Assigned IP</th>
+                  <th style="width:16%;">MAC Address</th>
+                  <th style="width:18%;">Hostname / OUI</th>
+                  <th style="width:15%;">Interface / AP</th>
+                  <th style="width:15%;">Lease Start</th>
+                  <th style="width:15%;">Lease End</th>
+                  <th style="width:8%;">Status</th>
+                </tr>
+              </thead>
+              <tbody id="dhcpTbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 视图 3：Wireless APs ================= -->
+      <section class="view-pane" id="view-ap">
+        <div class="status-grid">
+          <div class="stat-box">
+            <div class="stat-k">AP-01 (Front Counter)</div>
+            <div class="stat-v">11 Clients</div>
+            <div class="stat-s">5GHz Ch.36 | BSSID 44:D9:E7:10:01</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-k">AP-02 (Main Gaming Hall)</div>
+            <div class="stat-v">14 Clients</div>
+            <div class="stat-s">5GHz Ch.149 | BSSID 44:D9:E7:10:02</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-k">AP-03 (Rear Exit / Alley)</div>
+            <div class="stat-v">3 Clients</div>
+            <div class="stat-s">5GHz Ch.44 | BSSID 44:D9:E7:10:03</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-k">Guest SSID</div>
+            <div class="stat-v">NETCAFE_5G</div>
+            <div class="stat-s">VLAN 10 | Isolation: OFF</div>
+          </div>
+        </div>
+        <div class="table-region" style="border-top:1px solid var(--border);">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:18%;">AP Node</th>
+                  <th style="width:18%;">BSSID</th>
+                  <th style="width:14%;">Subnet</th>
+                  <th style="width:14%;">Radio / Channel</th>
+                  <th style="width:16%;">TX / RX (24h)</th>
+                  <th style="width:10%;">Clients</th>
+                  <th style="width:10%;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>AP-01 (Front-Counter)</td><td class="c-muted">44:D9:E7:10:01:A0</td><td>192.168.10.0/24</td><td>802.11ax / Ch.36</td><td>18.4 GB / 142.1 GB</td><td>11</td><td class="c-state-est">ONLINE</td></tr>
+                <tr><td>AP-02 (Main-Hall)</td><td class="c-muted">44:D9:E7:10:02:B4</td><td>192.168.10.0/24</td><td>802.11ax / Ch.149</td><td>24.1 GB / 219.8 GB</td><td>14</td><td class="c-state-est">ONLINE</td></tr>
+                <tr><td>AP-03 (Rear-Exit)</td><td class="c-muted">44:D9:E7:10:03:C8</td><td>192.168.10.0/24</td><td>802.11ax / Ch.44</td><td>4.2 GB / 38.6 GB</td><td>3</td><td class="c-state-est">ONLINE</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 视图 4：Raw Syslog ================= -->
+      <section class="view-pane" id="view-syslog">
+        <div class="syslog-pre" id="syslogPre"></div>
+      </section>
+
+      <!-- 底部状态条 -->
+      <footer class="statusbar">
+        <span id="statusLeft">Ready — tailing /proc/net/nf_conntrack (Today)</span>
+        <span>WAN NAT: 203.145.72.18 | Log Retention: 7d gzip rotated</span>
+      </footer>
+
+    </div>
+  </div>
+
+  <script>
+    /* =========================================================================
+       片场配置区（可按真实监控画面随时微调日期与时间）
+       ========================================================================= */
+    const CONFIG = {
+      // 第25场查到的第一跳代理 IP（搜索框盲打时会自动逐字输出此 IP）
+      targetProxyIp: "118.143.88.29",
+      targetProxyPort: 443,
+
+      // 嫌疑人（戴帽男）单条完整 NAT 会话归档参数（23/02/2026 晚上 10:30）
+      suspectDateLabel: "23/02/2026",
+      suspectTimeStart: "22:30:08",
+      suspectTimeEnd:   "22:32:42",
+      suspectDuration:  "00:02:34 (154s)",
+      suspectLocalIp:   "192.168.10.147",
+      suspectSrcPort:   54218,
+      suspectMac:       "D2:7F:4A:91:C8:03",
+      suspectAp:        "AP-03 (Rear-Exit)",
+      suspectBssid:     "44:D9:E7:10:03:C8",
+      suspectRssi:      "-74 dBm",
+      suspectNatPort:   58412,
+      suspectUploadTx:  "4.98 MB",
+      suspectDownRx:    "307 KB"
+    };
+
+    /* ================= 1. 生成今晚（Today）的真实网咖实时流量（仅显示相对时长，不暴露具体时间） ================= */
+    const cafeHosts = [
+      { iface: "br-lan", ap: "SW01-P04 (PC-04)", ip: "192.168.1.104", mac: "3C:7C:3F:19:A0:04", host: "NETCAFE-PC04", rssi: "Wired 1G" },
+      { iface: "br-lan", ap: "SW01-P11 (PC-11)", ip: "192.168.1.111", mac: "3C:7C:3F:19:A0:11", host: "NETCAFE-PC11", rssi: "Wired 1G" },
+      { iface: "br-lan", ap: "SW01-P17 (PC-17)", ip: "192.168.1.117", mac: "3C:7C:3F:19:A0:17", host: "NETCAFE-PC17", rssi: "Wired 1G" },
+      { iface: "br-lan", ap: "SW01-P23 (PC-23)", ip: "192.168.1.123", mac: "3C:7C:3F:19:A0:23", host: "NETCAFE-PC23", rssi: "Wired 1G" },
+      { iface: "br-lan", ap: "SW01-P31 (PC-31)", ip: "192.168.1.131", mac: "3C:7C:3F:19:A0:31", host: "NETCAFE-PC31", rssi: "Wired 1G" },
+      { iface: "br-lan", ap: "SW01-P38 (PC-38)", ip: "192.168.1.138", mac: "3C:7C:3F:19:A0:38", host: "NETCAFE-PC38", rssi: "Wired 1G" },
+      { iface: "vlan10-wlan", ap: "AP-01 (Front-Counter)", ip: "192.168.10.106", mac: "F4:5C:89:22:11:9B", host: "iPhone-15", rssi: "-52 dBm" },
+      { iface: "vlan10-wlan", ap: "AP-02 (Main-Hall)", ip: "192.168.10.119", mac: "8A:1D:04:77:E2:10", host: "Android-Client", rssi: "-61 dBm" },
+      { iface: "vlan10-wlan", ap: "AP-02 (Main-Hall)", ip: "192.168.10.128", mac: "2E:94:C1:08:55:AB", host: "Xiaomi-14", rssi: "-59 dBm" },
+      { iface: "vlan10-wlan", ap: "AP-01 (Front-Counter)", ip: "192.168.10.133", mac: "A0:99:9B:41:2C:7E", host: "iPhone", rssi: "-48 dBm" },
+      { iface: "vlan10-wlan", ap: "AP-03 (Rear-Exit)", ip: "192.168.10.141", mac: "6C:40:08:B1:3F:90", host: "Galaxy-S23", rssi: "-67 dBm" }
+    ];
+
+    const normalDestinations = [
+      { ip: "162.249.72.104", port: 5223, proto: "UDP", tx: "1.12 MB", rx: "14.8 MB" },
+      { ip: "103.28.54.16", port: 27015, proto: "UDP", tx: "640 KB", rx: "8.9 MB" },
+      { ip: "104.18.26.120", port: 443, proto: "TCP", tx: "84 KB", rx: "2.4 MB" },
+      { ip: "142.250.199.78", port: 443, proto: "TCP", tx: "192 KB", rx: "19.2 MB" },
+      { ip: "157.240.13.35", port: 443, proto: "TCP", tx: "310 KB", rx: "11.5 MB" },
+      { ip: "43.152.104.22", port: 8080, proto: "UDP", tx: "1.85 MB", rx: "28.4 MB" },
+      { ip: "155.133.248.34", port: 27020, proto: "UDP", tx: "490 KB", rx: "10.1 MB" },
+      { ip: "17.253.144.10", port: 443, proto: "TCP", tx: "52 KB", rx: "1.3 MB" },
+      { ip: "104.16.132.229", port: 443, proto: "TCP", tx: "128 KB", rx: "5.6 MB" },
+      { ip: "203.205.254.157", port: 443, proto: "TCP", tx: "412 KB", rx: "9.8 MB" },
+      { ip: "119.29.29.29", port: 53, proto: "UDP", tx: "2 KB", rx: "6 KB" }
+    ];
+
+    let rowIdCounter = 1000;
+
+    function formatRelativeAge(ageSec) {
+      if (ageSec <= 2) return "Just now";
+      if (ageSec < 60) return `${ageSec}s ago`;
+      const mins = Math.floor(ageSec / 60);
+      if (mins < 60) return `${mins}m ago`;
+      return "Today";
+    }
+
+    function makeLiveRow(initialAgeSec = 0) {
+      const host = cafeHosts[Math.floor(Math.random() * cafeHosts.length)];
+      const dst = normalDestinations[Math.floor(Math.random() * normalDestinations.length)];
+      const srcPort = 49152 + Math.floor(Math.random() * 14000);
+      const natPort = 32000 + Math.floor(Math.random() * 28000);
+      return {
+        id: ++rowIdCounter,
+        isLive: true,
+        ageSec: initialAgeSec,
+        iface: host.iface,
+        ap: host.ap,
+        bssid: host.iface === "vlan10-wlan" ? "44:D9:E7:10:02:B4" : "N/A (Wired)",
+        srcIp: host.ip,
+        srcPort: srcPort,
+        mac: host.mac,
+        device: host.host,
+        rssi: host.rssi,
+        dstIp: dst.ip,
+        dstPort: dst.port,
+        proto: dst.proto,
+        tx: dst.tx,
+        rx: dst.rx,
+        state: dst.proto === "TCP" ? "ESTABLISHED" : "ASSURED",
+        natPort: natPort,
+        duration: "Active",
+        leaseWindow: "Today (Active)",
+        sourceFile: "nf_conntrack (live)"
+      };
+    }
+
+    function getRowTimestampDisplay(r) {
+      if (r.isLive) return formatRelativeAge(r.ageSec);
+      return `${r.date} ${r.time}`;
+    }
+
+    function getRowWindowDisplay(r) {
+      if (r.isLive) return `Today — ${formatRelativeAge(r.ageSec)} (Active)`;
+      return r.timeWindow;
+    }
+
+    // 初始化 26 条今晚的实时记录（按新到旧排列）
+    let liveLogs = [];
+    for (let i = 25; i >= 0; i--) {
+      liveLogs.unshift(makeLiveRow(i * 3));
+    }
+
+    /* ================= 2. 历史归档日志（23/02/2026，每条连接按真实 Session Accounting 汇总为 1 行） ================= */
+    const archiveLogs = [
+      {
+        id: 501, isLive: false, date: CONFIG.suspectDateLabel, time: "22:34:11",
+        timeWindow: `${CONFIG.suspectDateLabel} 21:49:59 — 22:34:11`,
+        iface: "br-lan", ap: "SW01-P14 (PC-14)", bssid: "N/A (Wired)",
+        srcIp: "192.168.1.114", srcPort: 53912, mac: "3C:7C:3F:19:A0:14", device: "NETCAFE-PC14", rssi: "Wired 1G",
+        dstIp: "162.249.72.104", dstPort: 5223, proto: "UDP", tx: "920 KB", rx: "12.4 MB", state: "CLOSED",
+        natPort: 44102, duration: "00:44:12", leaseWindow: `${CONFIG.suspectDateLabel} 19:40:00 — 23:10:00`, sourceFile: "conntrack.log.1.gz"
+      },
+      {
+        id: 502, isLive: false, date: CONFIG.suspectDateLabel, time: "22:31:47",
+        timeWindow: `${CONFIG.suspectDateLabel} 22:20:39 — 22:31:47`,
+        iface: "vlan10-wlan", ap: "AP-02 (Main-Hall)", bssid: "44:D9:E7:10:02:B4",
+        srcIp: "192.168.10.112", srcPort: 51804, mac: "A0:99:9B:41:2C:7E", device: "iPhone", rssi: "-54 dBm",
+        dstIp: "142.250.199.78", dstPort: 443, proto: "TCP", tx: "145 KB", rx: "8.2 MB", state: "CLOSED",
+        natPort: 44810, duration: "00:11:08", leaseWindow: `${CONFIG.suspectDateLabel} 22:05:12 — 22:48:05 (Expired)`, sourceFile: "conntrack.log.1.gz"
+      },
+      /* ---- 嫌疑人针对 118.143.88.29 的唯一完整 NAT 会话归档记录 ---- */
+      {
+        id: 503, isLive: false, date: CONFIG.suspectDateLabel, time: CONFIG.suspectTimeStart,
+        timeWindow: `${CONFIG.suspectDateLabel} ${CONFIG.suspectTimeStart} — ${CONFIG.suspectTimeEnd}`,
+        iface: "vlan10-wlan", ap: CONFIG.suspectAp, bssid: CONFIG.suspectBssid,
+        srcIp: CONFIG.suspectLocalIp, srcPort: CONFIG.suspectSrcPort, mac: CONFIG.suspectMac, device: "Unknown (Randomized MAC)", rssi: CONFIG.suspectRssi,
+        dstIp: CONFIG.targetProxyIp, dstPort: CONFIG.targetProxyPort, proto: "TCP", tx: CONFIG.suspectUploadTx, rx: CONFIG.suspectDownRx, state: "CLOSED",
+        natPort: CONFIG.suspectNatPort, duration: CONFIG.suspectDuration,
+        leaseWindow: `${CONFIG.suspectDateLabel} 22:29:51 — 22:32:49 (Expired)`, sourceFile: "conntrack.log.1.gz"
+      },
+      {
+        id: 504, isLive: false, date: CONFIG.suspectDateLabel, time: "22:29:52",
+        timeWindow: `${CONFIG.suspectDateLabel} 21:27:34 — 22:29:52`,
+        iface: "br-lan", ap: "SW01-P28 (PC-28)", bssid: "N/A (Wired)",
+        srcIp: "192.168.1.128", srcPort: 50119, mac: "3C:7C:3F:19:A0:28", device: "NETCAFE-PC28", rssi: "Wired 1G",
+        dstIp: "103.28.54.16", dstPort: 27015, proto: "UDP", tx: "1.04 MB", rx: "16.3 MB", state: "CLOSED",
+        natPort: 44903, duration: "01:02:18", leaseWindow: `${CONFIG.suspectDateLabel} 20:05:00 — 23:30:00`, sourceFile: "conntrack.log.1.gz"
+      },
+      {
+        id: 505, isLive: false, date: CONFIG.suspectDateLabel, time: "22:28:30",
+        timeWindow: `${CONFIG.suspectDateLabel} 22:09:08 — 22:28:30`,
+        iface: "vlan10-wlan", ap: "AP-01 (Front-Counter)", bssid: "44:D9:E7:10:01:A0",
+        srcIp: "192.168.10.109", srcPort: 49880, mac: "C8:69:CD:55:10:4F", device: "iPhone-14Pro", rssi: "-50 dBm",
+        dstIp: "157.240.13.35", dstPort: 443, proto: "TCP", tx: "280 KB", rx: "14.1 MB", state: "CLOSED",
+        natPort: 45120, duration: "00:19:22", leaseWindow: `${CONFIG.suspectDateLabel} 22:02:11 — 22:45:00 (Expired)`, sourceFile: "conntrack.log.1.gz"
+      }
+    ];
+
+    /* ================= 状态变量 ================= */
+    let currentRows = [];
+    let selectedRowId = null;
+    let livePaused = false;
+    let liveInterval = null;
+    let fakeTypeLen = 0;
+
+    const filterInput = document.getElementById("filterInput");
+    const logSource = document.getElementById("logSource");
+    const ifaceSelect = document.getElementById("ifaceSelect");
+    const natTbody = document.getElementById("natTbody");
+    const rowCountMeta = document.getElementById("rowCountMeta");
+    const archiveOverlay = document.getElementById("archiveOverlay");
+    const archiveOverlayMsg = document.getElementById("archiveOverlayMsg");
+    const statusLeft = document.getElementById("statusLeft");
+    const liveDot = document.getElementById("liveDot");
+    const liveLabel = document.getElementById("liveLabel");
+    const pauseBtn = document.getElementById("pauseBtn");
+
+    function updateLiveUiState() {
+      const isLiveMode = logSource.value === "live" && !livePaused && !filterInput.value.trim();
+      liveDot.classList.toggle("paused", !isLiveMode);
+      liveLabel.textContent = isLiveMode ? "LIVE TAIL" : (logSource.value === "live" ? "PAUSED" : "ARCHIVE");
+      pauseBtn.textContent = livePaused ? "Resume" : "Pause";
+    }
+
+    /* ================= 渲染主表格 ================= */
+    function renderNatTable(rows) {
+      currentRows = rows;
+      natTbody.innerHTML = "";
+
+      if (rows.length === 0) {
+        natTbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:28px; color:var(--text-muted);">0 matching entries in selected log scope.</td></tr>`;
+        rowCountMeta.textContent = "0 rows";
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      rows.forEach(r => {
+        const tr = document.createElement("tr");
+        if (r.id === selectedRowId) tr.classList.add("selected");
+        tr.onclick = () => selectNatRow(r.id);
+
+        const protoCls = r.proto === "TCP" ? "c-tcp" : "c-udp";
+        const stateCls = (r.state === "ESTABLISHED" || r.state === "ASSURED") ? "c-state-est" : "c-state-cls";
+
+        tr.innerHTML = `
+          <td>${getRowTimestampDisplay(r)}</td>
+          <td class="c-muted">${r.iface}</td>
+          <td>${r.srcIp}:${r.srcPort}</td>
+          <td class="c-muted">${r.mac}</td>
+          <td>${r.dstIp}:${r.dstPort}</td>
+          <td class="${protoCls}">${r.proto}</td>
+          <td>${r.tx} / ${r.rx}</td>
+          <td class="${stateCls}">${r.state}</td>
+        `;
+        frag.appendChild(tr);
+      });
+
+      natTbody.appendChild(frag);
+      rowCountMeta.textContent = `${rows.length} ${rows.length === 1 ? "row" : "rows"}`;
+    }
+
+    /* ================= 只有手动点击某一行时，才展开底部技术详查 ================= */
+    function selectNatRow(id) {
+      selectedRowId = id;
+      renderNatTable(currentRows);
+
+      const r = currentRows.find(x => x.id === id);
+      if (!r) return;
+
+      const tsLabel = getRowTimestampDisplay(r);
+      const winLabel = getRowWindowDisplay(r);
+
+      document.getElementById("drawerStatus").textContent = `Flow #${r.id} (${r.sourceFile})`;
+      document.getElementById("drawerContent").innerHTML = `
+        <div class="detail-col">
+          <div class="col-heading">Conntrack / NAT Flow Summary</div>
+          <div class="kv-line"><span class="kv-k">Session Window</span><span class="kv-v">${winLabel}</span></div>
+          <div class="kv-line"><span class="kv-k">Duration</span><span class="kv-v">${r.duration}</span></div>
+          <div class="kv-line"><span class="kv-k">Source</span><span class="kv-v">${r.srcIp}:${r.srcPort}</span></div>
+          <div class="kv-line"><span class="kv-k">Destination</span><span class="kv-v">${r.dstIp}:${r.dstPort}</span></div>
+          <div class="kv-line"><span class="kv-k">NAT Translate</span><span class="kv-v">203.145.72.18:${r.natPort}</span></div>
+        </div>
+        <div class="detail-col">
+          <div class="col-heading">Traffic &amp; DHCP Lease</div>
+          <div class="kv-line"><span class="kv-k">Total TX / RX</span><span class="kv-v">${r.tx} / ${r.rx}</span></div>
+          <div class="kv-line"><span class="kv-k">MAC Address</span><span class="kv-v">${r.mac}</span></div>
+          <div class="kv-line"><span class="kv-k">Client / OUI</span><span class="kv-v">${r.device}</span></div>
+          <div class="kv-line"><span class="kv-k">Subnet</span><span class="kv-v">${r.iface === 'vlan10-wlan' ? '192.168.10.0/24' : '192.168.1.0/24'}</span></div>
+          <div class="kv-line"><span class="kv-k">DHCP Lease</span><span class="kv-v">${r.leaseWindow}</span></div>
+        </div>
+        <div class="detail-col">
+          <div class="col-heading">802.11 / Physical Port</div>
+          <div class="kv-line"><span class="kv-k">Interface</span><span class="kv-v">${r.iface}</span></div>
+          <div class="kv-line"><span class="kv-k">AP / Switch</span><span class="kv-v">${r.ap}</span></div>
+          <div class="kv-line"><span class="kv-k">BSSID</span><span class="kv-v">${r.bssid}</span></div>
+          <div class="kv-line"><span class="kv-k">Signal / Link</span><span class="kv-v">${r.rssi}</span></div>
+          <div class="kv-line"><span class="kv-k">State</span><span class="kv-v">${r.state === 'CLOSED' ? 'CLOSED (FIN/ACK)' : r.state}</span></div>
+        </div>
+      `;
+
+      document.getElementById("drawerRaw").textContent =
+        `[${tsLabel}] gw-netcafe-01 kernel: [nf_conntrack_acct] flow_summary proto=${r.proto} in=${r.iface} src=${r.srcIp}:${r.srcPort} mac=${r.mac} dst=${r.dstIp}:${r.dstPort} nat=203.145.72.18:${r.natPort} dur=${r.duration} tx=${r.tx} rx=${r.rx} ap="${r.ap}" state=${r.state}`;
+    }
+
+    function clearDrawer() {
+      selectedRowId = null;
+      document.getElementById("drawerStatus").textContent = "No row selected";
+      document.getElementById("drawerContent").innerHTML =
+        `<div class="drawer-empty">Click any NAT flow record above to inspect full session window, DHCP lease binding, and associated AP radio node.</div>`;
+      document.getElementById("drawerRaw").textContent = "syslog: —";
+    }
+
+    /* ================= 查询与归档过滤（搜索完成后不自动展开详情，等用户手动点击） ================= */
+    function handleSourceChange() {
+      runQuery();
+    }
+
+    function triggerQueryBtn() {
+      if (fakeTypeLen > 0 && fakeTypeLen < CONFIG.targetProxyIp.length) {
+        fakeTypeLen = CONFIG.targetProxyIp.length;
+        filterInput.value = CONFIG.targetProxyIp;
+      }
+      runQuery();
+    }
+
+    function runQuery() {
+      const rawQ = filterInput.value.trim().toLowerCase();
+      const q = rawQ.replace(/^(dst_ip|dst|src_ip|src|ip|mac)\s*(=|==|:)\s*/i, "");
+      const iface = ifaceSelect.value;
+
+      // 查历史 IP 时自动切入 48h 归档
+      if (q && logSource.value === "live") {
+        const hasInLive = liveLogs.some(r => matchesQuery(r, q, iface));
+        if (!hasInLive) {
+          logSource.value = "archive48";
+        }
+      }
+
+      const scope = logSource.value;
+      updateLiveUiState();
+
+      if (scope !== "live") {
+        archiveOverlayMsg.textContent = q
+          ? `zgrep -E "${q}" /var/log/nat/conntrack.log.1.gz ...`
+          : `Reading /var/log/nat/conntrack.log.1.gz ...`;
+        archiveOverlay.classList.add("active");
+        statusLeft.textContent = `Querying rotated archive (${scope === "archive48" ? "48h" : "7d"})...`;
+
+        setTimeout(() => {
+          archiveOverlay.classList.remove("active");
+          const pool = [...liveLogs, ...archiveLogs];
+          const matched = pool.filter(r => matchesQuery(r, q, iface));
+          clearDrawer();
+          renderNatTable(matched);
+          statusLeft.textContent = q
+            ? `Archive query finished: ${matched.length} ${matched.length === 1 ? "session" : "sessions"} matched "${q}"`
+            : `Loaded ${matched.length} entries from live + 48h archive`;
+        }, 420);
+      } else {
+        const matched = liveLogs.filter(r => matchesQuery(r, q, iface));
+        clearDrawer();
+        renderNatTable(matched);
+        statusLeft.textContent = q
+          ? `Filtered live buffer: ${matched.length} entries matched "${q}"`
+          : `Ready — tailing /proc/net/nf_conntrack (Today)`;
+      }
+    }
+
+    function matchesQuery(r, q, iface) {
+      if (iface !== "ALL" && r.iface !== iface) return false;
+      if (!q) return true;
+      return (
+        r.dstIp.toLowerCase().includes(q) ||
+        r.srcIp.toLowerCase().includes(q) ||
+        r.mac.toLowerCase().includes(q) ||
+        String(r.dstPort).includes(q) ||
+        r.ap.toLowerCase().includes(q)
+      );
+    }
+
+    function resetAll() {
+      fakeTypeLen = 0;
+      filterInput.value = "";
+      ifaceSelect.value = "ALL";
+      logSource.value = "live";
+      livePaused = false;
+      clearDrawer();
+      updateLiveUiState();
+      renderNatTable(liveLogs);
+      statusLeft.textContent = "Ready — tailing /proc/net/nf_conntrack (Today)";
+    }
+
+    function toggleLivePause() {
+      livePaused = !livePaused;
+      updateLiveUiState();
+    }
+
+    /* ================= 实时流量自然跳动（相对时长递增，无具体钟点） ================= */
+    function startLiveTail() {
+      clearInterval(liveInterval);
+      liveInterval = setInterval(() => {
+        const connEl = document.getElementById("connCount");
+        connEl.textContent = (1640 + Math.floor(Math.random() * 25)).toLocaleString();
+
+        if (logSource.value === "live" && !livePaused && !filterInput.value.trim()) {
+          liveLogs.forEach(r => { r.ageSec += 2; });
+          const newRow = makeLiveRow(0);
+          liveLogs.unshift(newRow);
+          if (liveLogs.length > 45) liveLogs.pop();
+
+          if (document.getElementById("view-nat").classList.contains("active")) {
+            const iface = ifaceSelect.value;
+            renderNatTable(liveLogs.filter(r => iface === "ALL" || r.iface === iface));
+          }
+          renderSyslog();
+        }
+      }, 2000);
+    }
+
+    /* ================= DHCP & Syslog 辅助视图 ================= */
+    const dhcpRecords = [
+      { ip: "192.168.10.106", mac: "F4:5C:89:22:11:9B", host: "iPhone-15 (Apple)", ap: "AP-01 (Front-Counter)", start: "Today (32m ago)", end: "Active", status: "ACTIVE" },
+      { ip: "192.168.10.119", mac: "8A:1D:04:77:E2:10", host: "Android-Client", ap: "AP-02 (Main-Hall)", start: "Today (24m ago)", end: "Active", status: "ACTIVE" },
+      { ip: "192.168.10.128", mac: "2E:94:C1:08:55:AB", host: "Xiaomi-14", ap: "AP-02 (Main-Hall)", start: "Today (18m ago)", end: "Active", status: "ACTIVE" },
+      { ip: "192.168.10.133", mac: "A0:99:9B:41:2C:7E", host: "iPhone (Apple)", ap: "AP-01 (Front-Counter)", start: "Today (11m ago)", end: "Active", status: "ACTIVE" },
+      { ip: "192.168.10.141", mac: "6C:40:08:B1:3F:90", host: "Galaxy-S23 (Samsung)", ap: "AP-03 (Rear-Exit)", start: "Today (6m ago)", end: "Active", status: "ACTIVE" },
+      { ip: "192.168.1.104", mac: "3C:7C:3F:19:A0:04", host: "NETCAFE-PC04", ap: "SW01-P04", start: "Today", end: "Static", status: "ACTIVE" },
+      { ip: "192.168.1.111", mac: "3C:7C:3F:19:A0:11", host: "NETCAFE-PC11", ap: "SW01-P11", start: "Today", end: "Static", status: "ACTIVE" },
+      { ip: "192.168.1.123", mac: "3C:7C:3F:19:A0:23", host: "NETCAFE-PC23", ap: "SW01-P23", start: "Today", end: "Static", status: "ACTIVE" },
+      { ip: CONFIG.suspectLocalIp, mac: CONFIG.suspectMac, host: "— (Locally Administered)", ap: CONFIG.suspectAp, start: `${CONFIG.suspectDateLabel} 22:29:51`, end: `${CONFIG.suspectDateLabel} 22:32:49`, status: "EXPIRED" },
+      { ip: "192.168.10.112", mac: "A0:99:9B:41:2C:7E", host: "iPhone (Apple)", ap: "AP-02 (Main-Hall)", start: `${CONFIG.suspectDateLabel} 22:05:12`, end: `${CONFIG.suspectDateLabel} 22:48:05`, status: "EXPIRED" }
+    ];
+
+    function renderDhcpTable() {
+      const scope = document.getElementById("dhcpScope").value;
+      const q = document.getElementById("dhcpFilter").value.trim().toLowerCase();
+      const tbody = document.getElementById("dhcpTbody");
+
+      const list = dhcpRecords.filter(d => {
+        if (scope === "active" && d.status !== "ACTIVE") return false;
+        if (!q) return true;
+        return d.ip.toLowerCase().includes(q) || d.mac.toLowerCase().includes(q) || d.ap.toLowerCase().includes(q);
+      });
+
+      tbody.innerHTML = list.map(d => `
+        <tr>
+          <td>${d.ip}</td>
+          <td class="c-muted">${d.mac}</td>
+          <td>${d.host}</td>
+          <td>${d.ap}</td>
+          <td class="c-muted">${d.start}</td>
+          <td class="c-muted">${d.end}</td>
+          <td class="${d.status === 'ACTIVE' ? 'c-state-est' : 'c-state-cls'}">${d.status}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderSyslog() {
+      const pre = document.getElementById("syslogPre");
+      pre.textContent = liveLogs.slice(0, 35).map(r =>
+        `[${formatRelativeAge(r.ageSec).padEnd(8, " ")}] gw-netcafe-01 kernel: [nf_conntrack] proto=${r.proto} in=${r.iface} src=${r.srcIp}:${r.srcPort} mac=${r.mac} dst=${r.dstIp}:${r.dstPort} tx=${r.tx} rx=${r.rx} state=${r.state}`
+      ).join("\n");
+    }
+
+    /* ================= 视图切换 ================= */
+    function switchView(name, el) {
+      document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+      el.classList.add("active");
+      document.querySelectorAll(".view-pane").forEach(p => p.classList.remove("active"));
+      document.getElementById("view-" + name).classList.add("active");
+
+      const paths = { nat: "conntrack-logs", dhcp: "dhcp-leases", ap: "wireless-aps", syslog: "syslog-raw" };
+      document.getElementById("topbarPath").textContent = paths[name] || name;
+
+      if (name === "dhcp") renderDhcpTable();
+      if (name === "syslog") renderSyslog();
+    }
+
+    /* ================= 核心：搜索框盲打自动输出 118.143.88.29 ================= */
+    filterInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (fakeTypeLen > 0 && fakeTypeLen < CONFIG.targetProxyIp.length) {
+          fakeTypeLen = CONFIG.targetProxyIp.length;
+          filterInput.value = CONFIG.targetProxyIp;
+        }
+        runQuery();
+        return;
+      }
+
+      if (e.key === "Escape" || e.key === "F2" || e.key === "Tab") {
+        return;
+      }
+
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        fakeTypeLen = Math.max(0, fakeTypeLen - 1);
+        filterInput.value = CONFIG.targetProxyIp.slice(0, fakeTypeLen);
+        if (fakeTypeLen === 0) resetAll();
+        return;
+      }
+
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (fakeTypeLen < CONFIG.targetProxyIp.length) {
+          fakeTypeLen++;
+          filterInput.value = CONFIG.targetProxyIp.slice(0, fakeTypeLen);
+        }
+      }
+    });
+
+    filterInput.addEventListener("input", () => {
+      const expected = CONFIG.targetProxyIp.slice(0, fakeTypeLen);
+      if (filterInput.value !== expected) {
+        if (filterInput.value.length < fakeTypeLen) {
+          fakeTypeLen = Math.max(0, filterInput.value.length);
+        } else if (fakeTypeLen < CONFIG.targetProxyIp.length) {
+          fakeTypeLen++;
+        }
+        filterInput.value = CONFIG.targetProxyIp.slice(0, fakeTypeLen);
+      }
+    });
+
+    /* ================= 全局快捷键（F2 自动演练搜索 / Esc 复位） ================= */
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        resetAll();
+      } else if (e.key === "F2") {
+        e.preventDefault();
+        switchView("nat", document.getElementById("nav-nat"));
+        fakeTypeLen = 0;
+        filterInput.value = "";
+        filterInput.focus();
+        const ip = CONFIG.targetProxyIp;
+        const typer = setInterval(() => {
+          fakeTypeLen++;
+          filterInput.value = ip.slice(0, fakeTypeLen);
+          if (fakeTypeLen >= ip.length) {
+            clearInterval(typer);
+            runQuery();
+          }
+        }, 45);
+      }
+    });
+
+    // 启动初始化
+    updateLiveUiState();
+    renderNatTable(liveLogs);
+    renderDhcpTable();
+    renderSyslog();
+    startLiveTail();
+  </script>
+</body>
+</html>
